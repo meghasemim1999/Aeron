@@ -175,7 +175,7 @@ public class ThreadedPing
 //                System.out.println("SENT: " + sendCounter);
 //            }
 
-//            Thread.sleep(0, 10000);
+            Thread.sleep(0, 10);
         }
     }
 
