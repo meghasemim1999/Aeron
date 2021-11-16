@@ -16,6 +16,7 @@
 
 import io.aeron.*;
 import io.aeron.driver.MediaDriver;
+import io.aeron.driver.ThreadingMode;
 import io.aeron.samples.SampleConfiguration;
 import org.HdrHistogram.Histogram;
 import io.aeron.logbuffer.FragmentHandler;
@@ -24,13 +25,18 @@ import org.agrona.BitUtil;
 import org.agrona.BufferUtil;
 import org.agrona.CloseHelper;
 import org.agrona.DirectBuffer;
-import org.agrona.concurrent.BusySpinIdleStrategy;
-import org.agrona.concurrent.IdleStrategy;
-import org.agrona.concurrent.UnsafeBuffer;
+import org.agrona.concurrent.*;
 import org.agrona.console.ContinueBarrier;
+import sun.awt.Mutex;
 
+import java.util.ArrayList;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.locks.Lock;
 
 /**
  * Ping component of Ping-Pong latency test recorded to a histogram to capture full distribution.
@@ -42,10 +48,10 @@ public class ThreadedPing
 {
     private static final int PING_STREAM_ID = SampleConfiguration.PING_STREAM_ID;
     private static final int PONG_STREAM_ID = SampleConfiguration.PONG_STREAM_ID;
-    private static final long NUMBER_OF_MESSAGES = 1_000_000L;
+    private static final long NUMBER_OF_MESSAGES = 100_000L;
     private static final long WARMUP_NUMBER_OF_MESSAGES = 10_000L;
     private static long sendCounter = 0L;
-    private static long recvCounter = 0L;
+    private static AtomicLong recvCounter = new AtomicLong(0);
     private static boolean warmed = false;
     private static final int WARMUP_NUMBER_OF_ITERATIONS = 10;
     //    private static final int MESSAGE_LENGTH = SampleConfiguration.MESSAGE_LENGTH;
@@ -63,6 +69,10 @@ public class ThreadedPing
     private static final Histogram HISTOGRAM = new Histogram(TimeUnit.SECONDS.toNanos(10), 3);
     private static final CountDownLatch LATCH = new CountDownLatch(1);
     private static final IdleStrategy POLLING_IDLE_STRATEGY = new BusySpinIdleStrategy();
+    private static ArrayList<Long> offeredPositions = new ArrayList<>();
+    private static int recvIndex = 0;
+    private static final ShutdownSignalBarrier sbarrier = new ShutdownSignalBarrier();
+    private static final Mutex mtx = new Mutex();
 
     /**
      * Main method for launching the process.
@@ -73,8 +83,12 @@ public class ThreadedPing
     public static void main(final String[] args) throws InterruptedException
     {
         final MediaDriver driver = EMBEDDED_MEDIA_DRIVER ? MediaDriver.launchEmbedded() : MediaDriver.launch();
+
+        driver.context().threadingMode(ThreadingMode.DEDICATED);
+
         final Aeron.Context ctx = new Aeron.Context().availableImageHandler(ThreadedPing::availablePongImageHandler);
         final FragmentHandler fragmentHandler = new FragmentAssembler(ThreadedPing::pongHandler);
+        final ExecutorService executor = Executors.newFixedThreadPool(2);
 
         if (EMBEDDED_MEDIA_DRIVER)
         {
@@ -109,39 +123,87 @@ public class ThreadedPing
 
             Thread.sleep(100);
             final ContinueBarrier barrier = new ContinueBarrier("Execute again?");
-
+            AtomicBoolean running = new AtomicBoolean(true);
+            final CountDownLatch lat = new CountDownLatch(2);
             do
             {
                 HISTOGRAM.reset();
+                recvCounter.set(0);
                 System.out.println("Pinging " + NUMBER_OF_MESSAGES + " messages");
 
-                Thread publisher = new Thread(){
-                    public void run()
-                    {
-                        try {
-                            roundTripMessagesPublisher(fragmentHandler, publication, subscription, NUMBER_OF_MESSAGES);
-                        } catch (InterruptedException e) {
-                            e.printStackTrace();
-                        }
+                executor.execute(() -> {
+                    try {
+                        roundTripMessagesPublisher(publication, NUMBER_OF_MESSAGES);
+                        lat.countDown();
+                    } catch (InterruptedException e) {
+                        e.printStackTrace();
                     }
-                };
+                });
 
-                Thread subscriber = new Thread(){
-                    public void run()
-                    {
-                        try {
-                            roundTripMessagesSubscriber(fragmentHandler, subscription, NUMBER_OF_MESSAGES);
-                        } catch (InterruptedException e) {
-                            e.printStackTrace();
-                        }
+                executor.execute(() -> {
+                    try {
+                        roundTripMessagesSubscriber(fragmentHandler, subscription, running);
+                        lat.countDown();
+                    } catch (InterruptedException e) {
+                        e.printStackTrace();
                     }
-                };
+                });
+//
+//                executor.execute(() -> {
+//                    try {
+//                        roundTripMessagesSubscriber(fragmentHandler, subscription, running);
+//                        lat.countDown();
+//                    } catch (InterruptedException e) {
+//                        e.printStackTrace();
+//                    }
+//                });
+//
+//                executor.execute(() -> {
+//                    try {
+//                        roundTripMessagesSubscriber(fragmentHandler, subscription, running);
+//                        lat.countDown();
+//                    } catch (InterruptedException e) {
+//                        e.printStackTrace();
+//                    }
+//                });
+//
+//                executor.execute(() -> {
+//                    try {
+//                        roundTripMessagesSubscriber(fragmentHandler, subscription, running);
+//                        lat.countDown();
+//                    } catch (InterruptedException e) {
+//                        e.printStackTrace();
+//                    }
+//                });
+//
+//                executor.execute(() -> {
+//                    try {
+//                        roundTripMessagesSubscriber(fragmentHandler, subscription, running);
+//                        lat.countDown();
+//                    } catch (InterruptedException e) {
+//                        e.printStackTrace();
+//                    }
+//                });
+//
+//                executor.execute(() -> {
+//                    try {
+//                        roundTripMessagesSubscriber(fragmentHandler, subscription, running);
+//                        lat.countDown();
+//                    } catch (InterruptedException e) {
+//                        e.printStackTrace();
+//                    }
+//                });
+//
+//                executor.execute(() -> {
+//                    try {
+//                        roundTripMessagesSubscriber(fragmentHandler, subscription, running);
+//                        lat.countDown();
+//                    } catch (InterruptedException e) {
+//                        e.printStackTrace();
+//                    }
+//                });
 
-                publisher.start();
-                subscriber.start();
-
-                publisher.join();
-                subscriber.join();
+                lat.await();
 
                 System.out.println("Histogram of RTT latencies in microseconds.");
 
@@ -154,9 +216,7 @@ public class ThreadedPing
     }
 
     private static void roundTripMessagesPublisher(
-            final FragmentHandler fragmentHandler,
             final Publication publication,
-            final Subscription subscription,
             final long count) throws InterruptedException {
 
         for (long i = 0; i < count; i++)
@@ -169,29 +229,38 @@ public class ThreadedPing
             }
             while ((offeredPosition = publication.offer(OFFER_BUFFER, 0, MESSAGE_LENGTH, null)) < 0L);
 
+//            offeredPositions.add(offeredPosition);
             sendCounter++;
-//            if(sendCounter % 10000 == 0)
-//            {
-//                System.out.println("SENT: " + sendCounter);
-//            }
+            if(sendCounter % 10000 == 0)
+            {
+                System.out.println("SENT: " + sendCounter);
+            }
 
-            Thread.sleep(0, 10);
+            Thread.sleep(1, 0);
         }
     }
 
+        {
+//            Thread.yield();
+        }
     private static void roundTripMessagesSubscriber(
             final FragmentHandler fragmentHandler,
             final Subscription subscription,
-            final long count) throws InterruptedException {
+            AtomicBoolean running) throws InterruptedException {
+
         while (!subscription.isConnected())
         {
             Thread.yield();
         }
 
-        while (recvCounter < count)
+        IdleStrategy idleStrategy = new BackoffIdleStrategy();
+
+        while (recvCounter.longValue() < NUMBER_OF_MESSAGES)
         {
-            final int fragments = subscription.poll(fragmentHandler, FRAGMENT_COUNT_LIMIT);
-            POLLING_IDLE_STRATEGY.idle(fragments);
+//            mtx.lock();
+            idleStrategy.idle(subscription.poll(fragmentHandler, FRAGMENT_COUNT_LIMIT));
+//            mtx.unlock();
+//            POLLING_IDLE_STRATEGY.idle(fragments);
         }
     }
 
@@ -230,13 +299,13 @@ public class ThreadedPing
         final long pingTimestamp = buffer.getLong(offset);
         final long rttNs = System.nanoTime() - pingTimestamp;
 
-        recvCounter++;
+        recvCounter.incrementAndGet();
 //        if(warmed)
-//        if(recvCounter % 10000 == 0)
-//        {
-//            System.out.println("RECV: " + recvCounter);
-//            System.out.println("RTT: " + rttNs);
-//        }
+        if(recvCounter.longValue() % 10000 == 0)
+        {
+            System.out.println("RECV: " + recvCounter);
+            System.out.println("RTT: " + rttNs);
+        }
 
         HISTOGRAM.recordValue(rttNs);
     }

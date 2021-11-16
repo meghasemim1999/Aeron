@@ -20,6 +20,7 @@ import io.aeron.Aeron;
 import io.aeron.Publication;
 import io.aeron.Subscription;
 import io.aeron.driver.MediaDriver;
+import io.aeron.driver.ThreadingMode;
 import io.aeron.logbuffer.*;
 import io.aeron.samples.SampleConfiguration;
 import io.aeron.samples.SamplesUtil;
@@ -44,9 +45,9 @@ public class MyPong
 //    public static final String PONG_CHANNEL = "aeron:udp?endpoint=172.16.30.103:20124";
     public static final String PING_CHANNEL = "aeron:udp?endpoint=localhost:20125";
     public static final String PONG_CHANNEL = "aeron:udp?endpoint=localhost:20126";
-    private static final boolean INFO_FLAG = SampleConfiguration.INFO_FLAG;
+    private static final boolean INFO_FLAG = true;
     private static final boolean EMBEDDED_MEDIA_DRIVER = true;
-    private static final boolean EXCLUSIVE_PUBLICATIONS = SampleConfiguration.EXCLUSIVE_PUBLICATIONS;
+    private static final boolean EXCLUSIVE_PUBLICATIONS = false;
 
     private static final IdleStrategy PING_HANDLER_IDLE_STRATEGY = new BusySpinIdleStrategy();
 
@@ -58,6 +59,8 @@ public class MyPong
     public static void main(final String[] args)
     {
         final MediaDriver driver = EMBEDDED_MEDIA_DRIVER ? MediaDriver.launchEmbedded() : MediaDriver.launch();
+
+        driver.context().threadingMode(ThreadingMode.DEDICATED);
 
         final Aeron.Context ctx = new Aeron.Context();
         if (EMBEDDED_MEDIA_DRIVER)
