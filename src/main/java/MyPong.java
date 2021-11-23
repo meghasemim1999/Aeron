@@ -28,6 +28,7 @@ import org.agrona.CloseHelper;
 import org.agrona.DirectBuffer;
 import org.agrona.concurrent.BusySpinIdleStrategy;
 import org.agrona.concurrent.IdleStrategy;
+import org.agrona.concurrent.NoOpIdleStrategy;
 import org.agrona.concurrent.SigInt;
 
 /**
@@ -47,9 +48,9 @@ public class MyPong
     public static final String PONG_CHANNEL = "aeron:udp?endpoint=localhost:20126";
     private static final boolean INFO_FLAG = true;
     private static final boolean EMBEDDED_MEDIA_DRIVER = true;
-    private static final boolean EXCLUSIVE_PUBLICATIONS = false;
+    private static final boolean EXCLUSIVE_PUBLICATIONS = true;
 
-    private static final IdleStrategy PING_HANDLER_IDLE_STRATEGY = new BusySpinIdleStrategy();
+    private static final IdleStrategy PING_HANDLER_IDLE_STRATEGY = new NoOpIdleStrategy();
 
     /**
      * Main method for launching the process.
@@ -74,7 +75,7 @@ public class MyPong
             ctx.unavailableImageHandler(SamplesUtil::printUnavailableImage);
         }
 
-        final IdleStrategy idleStrategy = new BusySpinIdleStrategy();
+        final IdleStrategy idleStrategy = new NoOpIdleStrategy();
 
         System.out.println("Subscribing Ping at " + PING_CHANNEL + " on stream id " + PING_STREAM_ID);
         System.out.println("Publishing Pong at " + PONG_CHANNEL + " on stream id " + PONG_STREAM_ID);
